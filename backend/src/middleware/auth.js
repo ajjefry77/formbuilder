@@ -4,7 +4,7 @@ import { pool } from "../db/index.js";
 const JWT_SECRET = process.env.JWT_SECRET;
 
 /**
- * توکن JWT را از هدر Authorization می‌خواند و کاربر را روی req.user قرار می‌دهد.
+ * توکن JWT ر از هدر Authorization می‌خواند و کاربر را روی req.user قرار می‌دهد.
  * در صورت نبود یا نامعتبر بودن توکن، خطای ۴۰۱ برمی‌گرداند.
  */
 export function authenticate(req, res, next) {
