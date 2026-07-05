@@ -4,11 +4,12 @@
     <aside class="palette">
       <h3 class="palette-title">نوع فیلد</h3>
       <button
-        v-for="ft in FIELD_TYPES" :key="ft.type"
+        v-for="ft in FIELD_TYPES" 
+        :key="ft.type"
         class="palette-item"
         @click="addField(ft.type)"
       >
-        <span class="palette-icon">{{ ft.icon }}</span>
+        <Icon :icon="ft.icon" class="palette-icon" width="22" height="22" />
         <span>{{ ft.label }}</span>
       </button>
     </aside>
@@ -30,7 +31,8 @@
 
       <div v-else class="fields-list">
         <div
-          v-for="(field, idx) in fields" :key="field.id"
+          v-for="(field, idx) in fields" 
+          :key="field.id"
           class="field-row"
           :class="{ 'field-row--selected': selectedFieldId === field.id, 'field-row--dragover': dragOverIndex === idx }"
           draggable="true"
@@ -42,16 +44,27 @@
           @dragend="dragOverIndex = null"
         >
           <span class="drag-handle">⠿</span>
+          
           <div class="field-preview">
             <div class="field-label-row">
-              <span class="field-type-badge">{{ FIELD_TYPES.find(f=>f.type===field.type)?.icon }}</span>
+              <Icon 
+                :icon="FIELD_TYPES.find(f => f.type === field.type)?.icon || 'mdi:help-circle-outline'" 
+                class="field-type-badge" 
+                width="20" 
+                height="20"
+              />
               <strong>{{ field.label }}</strong>
               <span v-if="field.required" class="required-star">*</span>
             </div>
           </div>
+
           <div class="field-row-actions">
-            <button class="icon-btn" title="کپی" @click.stop="duplicateField(field.id)">⧉</button>
-            <button class="icon-btn danger" title="حذف" @click.stop="removeField(field.id)">✕</button>
+            <button class="icon-btn" title="کپی" @click.stop="duplicateField(field.id)">
+              <Icon icon="mdi:content-copy" width="18" height="18" />
+            </button>
+            <button class="icon-btn danger" title="حذف" @click.stop="removeField(field.id)">
+              <Icon icon="mdi:delete-outline" width="18" height="18" />
+            </button>
           </div>
         </div>
       </div>
@@ -91,11 +104,17 @@
         <div v-for="(opt, i) in selectedField.options" :key="i" class="option-row">
           <input class="input" :value="opt"
             @input="updateOption(selectedField.id, i, $event.target.value)" />
-          <button class="icon-btn danger" @click="removeOption(selectedField.id, i)">✕</button>
+          <button class="icon-btn danger" @click="removeOption(selectedField.id, i)">
+            <Icon icon="mdi:delete-outline" width="16" height="16" />
+          </button>
         </div>
-        <button class="btn btn-ghost btn-sm" style="margin-top:8px" @click="addOption(selectedField.id)">+ افزودن گزینه</button>
+        <button class="btn btn-ghost btn-sm" style="margin-top:8px" @click="addOption(selectedField.id)">
+          <Icon icon="mdi:plus" width="16" height="16" style="margin-left:4px" />
+          افزودن گزینه
+        </button>
       </div>
     </aside>
+
     <aside class="properties properties--empty" v-else>
       <p>یک فیلد انتخاب کنید تا تنظیمات آن نمایش داده شود</p>
     </aside>
@@ -111,7 +130,8 @@
       <div style="display:flex;gap:8px">
         <router-link to="/" class="btn btn-ghost">انصراف</router-link>
         <button class="btn btn-primary" :disabled="saving" @click="save">
-          {{ saving ? 'در حال ذخیره...' : (isEdit ? '💾 ذخیره تغییرات' : '✅ ایجاد فرم') }}
+          <Icon v-if="!saving" icon="mdi:content-save" width="18" height="18" style="margin-left:6px" />
+          {{ saving ? 'در حال ذخیره...' : (isEdit ? 'ذخیره تغییرات' : 'ایجاد فرم') }}
         </button>
       </div>
     </div>
