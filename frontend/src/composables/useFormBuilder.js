@@ -13,6 +13,7 @@ export const FIELD_TYPES = [
   { type: 'radio',    label: 'تک‌انتخابی',    icon: '⭕' },
   { type: 'checkbox', label: 'چندانتخابی',    icon: '☑️' },
   { type: 'file',     label: 'آپلود فایل',    icon: '📎' },
+  { type: 'location', label: 'موقعیت مکانی',  icon: '📍' },
 ]
 
 function createField(type) {

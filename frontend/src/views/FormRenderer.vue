@@ -64,6 +64,19 @@
             </label>
           </div>
 
+          <div v-else-if="field.type === 'location'" class="location-field">
+            <div v-if="formData[field.id]" class="location-display">
+              <span class="location-dot"></span>
+              <span class="location-coords">
+                {{ formData[field.id].lat.toFixed(6) }}، {{ formData[field.id].lng.toFixed(6) }}
+              </span>
+            </div>
+            <div v-else class="location-pending">
+              <span class="location-spinner"></span>
+              در حال دریافت موقعیت مکانی...
+            </div>
+          </div>
+
           <input v-else-if="field.type === 'file'" type="file" class="input" />
 
           <p v-if="field.helpText" class="help-text">{{ field.helpText }}</p>
@@ -93,6 +106,7 @@ const emit = defineEmits(['submit'])
 const submitting = ref(false)
 const submitted = ref(false)
 const formData = reactive({})
+const userLocation = ref(null)
 
 const fields = ref([])
 const { errors, validate, clearError } = useFormValidator(fields)
@@ -100,6 +114,23 @@ const { errors, validate, clearError } = useFormValidator(fields)
 onMounted(() => {
   if (props.form) {
     fields.value = props.form.fields || []
+  }
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const loc = {
+          lat: pos.coords.latitude,
+          lng: pos.coords.longitude,
+        };
+        userLocation.value = loc;
+        const locField = fields.value.find(f => f.type === 'location');
+        if (locField) {
+          formData[locField.id] = loc;
+        }
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 10000 },
+    );
   }
 })
 
@@ -115,7 +146,11 @@ async function submit() {
   if (!validate(formData)) return
   submitting.value = true
   try {
-    emit('submit', { ...formData })
+    const payload = { ...formData }
+    if (userLocation.value) {
+      payload._location = userLocation.value
+    }
+    emit('submit', payload)
     submitted.value = true
   } catch (e) {
     alert('خطا: ' + e.message)
@@ -146,4 +181,11 @@ function reset() {
 .success-card h2 { font-size: 22px; margin-bottom: 8px; }
 .success-card p { color: var(--text-muted); }
 .loading { text-align: center; padding: 60px; color: var(--text-muted); }
+.location-field { width: 100%; }
+.location-display { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); }
+.location-dot { width: 10px; height: 10px; border-radius: 50%; background: var(--success); box-shadow: 0 0 8px var(--success); flex-shrink: 0; }
+.location-coords { font-size: 13px; color: var(--text-muted); direction: ltr; font-family: monospace; }
+.location-pending { display: flex; align-items: center; gap: 10px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); color: var(--text-muted); font-size: 13px; }
+.location-spinner { width: 14px; height: 14px; border: 2px solid var(--border); border-top-color: var(--accent); border-radius: 50%; animation: spin 0.8s linear infinite; flex-shrink: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
 </style>

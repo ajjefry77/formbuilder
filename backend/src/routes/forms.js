@@ -252,53 +252,54 @@ router.get(
           const { field_key, operator, value } = f;
           const logic = operator || "contains";
 
+          const dbKey = field_key.startsWith("field_") ? field_key.slice(6) : field_key;
           const keyParam = `$${idx++}`;
           let cond = "";
 
           switch (logic) {
             case "eq":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text = $${idx++})`;
-              params.push(field_key, value);
+              params.push(dbKey, value);
               break;
             case "neq":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text != $${idx++})`;
-              params.push(field_key, value);
+              params.push(dbKey, value);
               break;
             case "contains":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text ILIKE $${idx++})`;
-              params.push(field_key, `%${value}%`);
+              params.push(dbKey, `%${value}%`);
               break;
             case "not_contains":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text NOT ILIKE $${idx++})`;
-              params.push(field_key, `%${value}%`);
+              params.push(dbKey, `%${value}%`);
               break;
             case "gt":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND (rv.value_number > $${idx++} OR rv.value_date > $${idx++} OR rv.value_datetime > $${idx++}))`;
-              params.push(field_key, value, value, value);
+              params.push(dbKey, value, value, value);
               break;
             case "gte":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND (rv.value_number >= $${idx++} OR rv.value_date >= $${idx++} OR rv.value_datetime >= $${idx++}))`;
-              params.push(field_key, value, value, value);
+              params.push(dbKey, value, value, value);
               break;
             case "lt":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND (rv.value_number < $${idx++} OR rv.value_date < $${idx++} OR rv.value_datetime < $${idx++}))`;
-              params.push(field_key, value, value, value);
+              params.push(dbKey, value, value, value);
               break;
             case "lte":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND (rv.value_number <= $${idx++} OR rv.value_date <= $${idx++} OR rv.value_datetime <= $${idx++}))`;
-              params.push(field_key, value, value, value);
+              params.push(dbKey, value, value, value);
               break;
             case "is_empty":
               cond = `NOT EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text IS NOT NULL AND rv.value_text != '')`;
-              params.push(field_key);
+              params.push(dbKey);
               break;
             case "is_not_empty":
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text IS NOT NULL AND rv.value_text != '')`;
-              params.push(field_key);
+              params.push(dbKey);
               break;
             default:
               cond = `EXISTS (SELECT 1 FROM response_values rv WHERE rv.response_id = fs.id AND rv.field_key = ${keyParam} AND rv.value_text ILIKE $${idx++})`;
-              params.push(field_key, `%${value}%`);
+              params.push(dbKey, `%${value}%`);
           }
 
           return cond;
