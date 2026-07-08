@@ -52,7 +52,7 @@ async function onSubmit() {
   min-height: 100vh;
   display: flex; align-items: center; justify-content: center;
   background:
-    radial-gradient(circle at 20% 20%, var(--accent-glow), transparent 40%),
+    radial-gradient(circle at 20% 20%, rgba(245,158,11,.15), transparent 40%),
     radial-gradient(circle at 80% 80%, rgba(62,207,142,.12), transparent 40%),
     var(--bg);
   padding: 20px;

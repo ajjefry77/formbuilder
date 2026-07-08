@@ -32,9 +32,10 @@ const submitLimiter = rateLimit({
 router.get("/", authenticate, async (req, res) => {
   try {
     let result;
-    if (req.user.role === "admin") {
+    const groupIds = req.user.group_ids || [];
+    if (req.user.roles?.includes("admin")) {
       result = await pool.query("SELECT * FROM forms ORDER BY created_at DESC");
-    } else if (req.user.role === "group_manager") {
+    } else if (req.user.roles?.includes("group_manager")) {
       result = await pool.query(
         `
         SELECT * FROM forms 
@@ -44,13 +45,20 @@ router.get("/", authenticate, async (req, res) => {
         ORDER BY created_at DESC`,
         [req.user.id],
       );
-    } else {
+    } else if (groupIds.length) {
       result = await pool.query(
         `SELECT * FROM forms WHERE id IN (
            SELECT form_id FROM form_user_permissions WHERE user_id = $1
            UNION
-           SELECT fgp.form_id FROM form_group_permissions fgp
-             JOIN users u ON u.group_id = fgp.group_id WHERE u.id = $1
+           SELECT form_id FROM form_group_permissions WHERE group_id = ANY($2::bigint[])
+         )
+         ORDER BY created_at DESC`,
+        [req.user.id, groupIds],
+      );
+    } else {
+      result = await pool.query(
+        `SELECT * FROM forms WHERE id IN (
+           SELECT form_id FROM form_user_permissions WHERE user_id = $1
          )
          ORDER BY created_at DESC`,
         [req.user.id],
@@ -111,7 +119,7 @@ router.post("/", authenticate, requireGroupManagerOrAdmin, async (req, res) => {
 
   try {
     // مدیر گروه فقط می‌تواند به گروه خودش اختصاص دهد
-    if (req.user.role === "group_manager" && group_id) {
+    if (req.user.roles?.includes("group_manager") && group_id) {
       const { rows } = await pool.query(
         "SELECT 1 FROM groups WHERE id = $1 AND created_by = $2",
         [group_id, req.user.id],
@@ -154,7 +162,7 @@ router.put("/:id", authenticate, checkFormAccess("id"), async (req, res) => {
   try {
     // مدیر گروه فقط می‌تواند فرم را به یکی از گروه‌های خودش اختصاص دهد
     const groupIdProvided = group_id !== undefined;
-    if (groupIdProvided && req.user.role === "group_manager" && group_id !== null) {
+    if (groupIdProvided && req.user.roles?.includes("group_manager") && group_id !== null) {
       const { rows } = await pool.query(
         "SELECT 1 FROM groups WHERE id = $1 AND created_by = $2",
         [group_id, req.user.id],

@@ -17,6 +17,7 @@
         <p v-if="g.description" class="group-desc">{{ g.description }}</p>
         <div class="form-actions">
           <button class="btn btn-ghost btn-sm" @click="openEdit(g)">✏️ ویرایش</button>
+          <button class="btn btn-ghost btn-sm" @click="openMembers(g)">👥 اعضا</button>
           <button class="btn btn-ghost btn-sm" @click="openPermissions(g)">🔑 دسترسی فرم‌ها</button>
           <button class="btn btn-danger btn-sm" @click="onDelete(g)">🗑️</button>
         </div>
@@ -61,6 +62,35 @@
         </div>
       </div>
     </div>
+
+    <!-- مودال اعضای گروه -->
+    <div v-if="membersModalOpen" class="modal-backdrop" @click.self="membersModalOpen = false">
+      <div class="modal card modal-wide">
+        <h2 class="modal-title">اعضای گروه «{{ membersGroup?.name }}»</h2>
+        <p class="modal-hint">کاربرانی که عضو این گروه هستند را انتخاب کنید.</p>
+
+        <div v-if="membersLoading" class="loading" style="padding:20px">در حال بارگذاری...</div>
+
+        <div v-else class="members-list">
+          <label v-for="u in allUsers" :key="u.id" class="check-row">
+            <input type="checkbox" :value="u.id" v-model="selectedMemberIds" />
+            <span>{{ u.full_name }}</span>
+            <span class="member-phone" dir="ltr">{{ u.phone }}</span>
+            <span class="badge" :class="(u.roles || [u.role])?.includes('admin') ? 'badge-active' : 'badge-inactive'" style="margin-right:auto">
+              {{ (u.roles || [u.role])?.includes('admin') ? 'مدیر' : (u.roles || [u.role])?.includes('group_manager') ? 'مدیر گروه' : 'کاربر' }}
+            </span>
+          </label>
+          <p v-if="!allUsers.length" class="empty-hint">هیچ کاربری یافت نشد.</p>
+        </div>
+
+        <p v-if="membersError" class="field-error">❌ {{ membersError }}</p>
+
+        <div class="modal-actions">
+          <button class="btn btn-ghost" @click="membersModalOpen = false">انصراف</button>
+          <button class="btn btn-primary" :disabled="savingMembers" @click="onSaveMembers">{{ savingMembers ? 'در حال ذخیره...' : 'ذخیره اعضا' }}</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -68,9 +98,13 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useGroups } from '../../composables/useGroups.js'
 import { useForms } from '../../composables/useForms.js'
+import { useUsers } from '../../composables/useUsers.js'
+import { useAuthStore } from '../../stores/auth.js'
 
-const { groups, loading, fetchGroups, createGroup, updateGroup, deleteGroup, fetchGroupPermissions, setGroupPermissions } = useGroups()
+const { groups, loading, fetchGroups, createGroup, updateGroup, deleteGroup, fetchGroupPermissions, setGroupPermissions, fetchGroupMembers, setGroupMembers } = useGroups()
 const { forms: allForms, fetchForms } = useForms()
+const { users: allUsers, fetchUsers } = useUsers()
+const auth = useAuthStore()
 
 const modalOpen = ref(false)
 const modalError = ref('')
@@ -82,6 +116,13 @@ const permModalOpen = ref(false)
 const permGroup = ref(null)
 const selectedFormIds = ref([])
 const savingPerm = ref(false)
+
+const membersModalOpen = ref(false)
+const membersGroup = ref(null)
+const selectedMemberIds = ref([])
+const savingMembers = ref(false)
+const membersError = ref('')
+const membersLoading = ref(false)
 
 onMounted(async () => {
   await Promise.all([fetchGroups(), fetchForms()])
@@ -136,6 +177,36 @@ async function onSavePermissions() {
     savingPerm.value = false
   }
 }
+
+async function openMembers(g) {
+  membersGroup.value = g
+  membersError.value = ''
+  membersLoading.value = true
+  membersModalOpen.value = true
+  try {
+    await fetchUsers()
+    const memberIds = await fetchGroupMembers(g.id)
+    selectedMemberIds.value = memberIds.map(m => m.id)
+  } catch (e) {
+    membersError.value = e.message
+  } finally {
+    membersLoading.value = false
+  }
+}
+
+async function onSaveMembers() {
+  savingMembers.value = true
+  membersError.value = ''
+  try {
+    await setGroupMembers(membersGroup.value.id, selectedMemberIds.value)
+    await fetchGroups()
+    membersModalOpen.value = false
+  } catch (e) {
+    membersError.value = e.message
+  } finally {
+    savingMembers.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -158,4 +229,7 @@ async function onSavePermissions() {
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding: 6px 8px; border-radius: 8px; }
 .check-row:hover { background: var(--surface2); }
 .empty-hint { font-size: 12px; color: var(--text-muted); }
+.modal-wide { max-width: 520px; }
+.members-list { display: flex; flex-direction: column; gap: 6px; max-height: 300px; overflow-y: auto; }
+.member-phone { font-size: 12px; color: var(--text-muted); direction: ltr; }
 </style>

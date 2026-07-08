@@ -35,9 +35,18 @@ export function useGroups() {
     return await put(`/groups/${id}/permissions`, { formIds })
   }
 
+  async function fetchGroupMembers(id) {
+    return await get(`/groups/${id}/members`)
+  }
+
+  async function setGroupMembers(id, userIds) {
+    return await put(`/groups/${id}/members`, { userIds })
+  }
+
   return {
     groups, loading, error,
     fetchGroups, createGroup, updateGroup, deleteGroup,
     fetchGroupPermissions, setGroupPermissions,
+    fetchGroupMembers, setGroupMembers,
   }
 }

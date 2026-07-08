@@ -3,9 +3,25 @@ import { pool } from "../db/index.js";
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
+export async function fetchUserRoles(userId) {
+  const { rows } = await pool.query(
+    "SELECT role FROM user_roles WHERE user_id = $1",
+    [userId]
+  );
+  return rows.map(r => r.role);
+}
+
+export async function fetchUserGroupIds(userId) {
+  const { rows } = await pool.query(
+    "SELECT group_id FROM user_groups WHERE user_id = $1",
+    [userId]
+  );
+  return rows.map(r => r.group_id);
+}
+
 /**
  * توکن JWT ر از هدر Authorization می‌خواند و کاربر را روی req.user قرار می‌دهد.
- * در صورت نبود یا نامعتبر بودن توکن، خطای ۴۰۱ برمی‌گرداند.
+ * roles و group_ids را از دیتابیس می‌خواند و به payload اضافه می‌کند.
  */
 export function authenticate(req, res, next) {
   const header = req.headers.authorization || "";
@@ -15,8 +31,16 @@ export function authenticate(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload; // { id, phone, role, group_id, full_name }
-    next();
+    Promise.all([
+      fetchUserRoles(payload.id),
+      fetchUserGroupIds(payload.id),
+    ]).then(([roles, group_ids]) => {
+      req.user = { ...payload, roles, group_ids };
+      next();
+    }).catch(() => {
+      req.user = { ...payload, roles: [], group_ids: [] };
+      next();
+    });
   } catch (e) {
     return res
       .status(401)
@@ -24,16 +48,20 @@ export function authenticate(req, res, next) {
   }
 }
 
+function hasRole(user, role) {
+  return user?.roles?.includes(role);
+}
+
 /** مدیر سیستم یا مدیر گروه */
 export function requireGroupManagerOrAdmin(req, res, next) {
-  if (req.user?.role === 'admin' || req.user?.role === 'group_manager') {
+  if (hasRole(req.user, 'admin') || hasRole(req.user, 'group_manager')) {
     return next();
   }
   return res.status(403).json({ success: false, error: 'دسترسی کافی ندارید' });
 }
 
 export function requireAdmin(req, res, next) {
-  if (req.user?.role !== 'admin') {
+  if (!hasRole(req.user, 'admin')) {
     return res.status(403).json({ success: false, error: 'فقط مدیر سیستم اجازه‌ی این عملیات را دارد' });
   }
   next();
@@ -42,7 +70,7 @@ export function requireAdmin(req, res, next) {
 // چک مالکیت کاربر (مدیر گروه فقط به کاربرانی دسترسی دارد که خودش ساخته)
 export function checkUserOwnership() {
   return async (req, res, next) => {
-    if (req.user?.role === 'admin') return next();
+    if (hasRole(req.user, 'admin')) return next();
 
     const userId = req.params.id;
     try {
@@ -63,7 +91,7 @@ export function checkUserOwnership() {
 // چک مالکیت گروه
 export function checkGroupOwnership() {
   return async (req, res, next) => {
-    if (req.user?.role === 'admin') return next();
+    if (hasRole(req.user, 'admin')) return next();
     
     const groupId = req.params.id || req.body.group_id;
     if (!groupId) return next();
@@ -85,11 +113,11 @@ export function checkGroupOwnership() {
 
 /**
  * بررسی می‌کند کاربر فعلی به فرم مشخص‌شده در پارامتر مسیر (پیش‌فرض :id) دسترسی دارد یا نه.
- * مدیر همیشه دسترسی کامل دارد. کاربر عادی باید یا دسترسی مستقیم داشته باشد یا از طریق گروه خودش.
+ * مدیر همیشه دسترسی کامل دارد. کاربر عادی باید یا دسترسی مستقیم داشته باشد یا از طریق گروه‌های خودش.
  */
 export function checkFormAccess(paramName = "id") {
   return async (req, res, next) => {
-    if (req.user?.role === "admin") return next();
+    if (hasRole(req.user, 'admin')) return next();
 
     const formId = req.params[paramName];
     try {
@@ -103,7 +131,7 @@ export function checkFormAccess(paramName = "id") {
       }
 
       // مدیر گروه: فرم‌هایی که خودش ساخته یا به یکی از گروه‌های خودش اختصاص داده
-      if (req.user?.role === "group_manager") {
+      if (hasRole(req.user, 'group_manager')) {
         const owned = await pool.query(
           `SELECT 1 FROM forms f
              WHERE f.id = $1
@@ -115,15 +143,21 @@ export function checkFormAccess(paramName = "id") {
         if (owned.rows.length) return next();
       }
 
-      const result = await pool.query(
-        `SELECT 1 FROM form_user_permissions WHERE form_id = $1 AND user_id = $2
-         UNION
-         SELECT 1 FROM form_group_permissions g
-           JOIN users u ON u.group_id = g.group_id
-           WHERE g.form_id = $1 AND u.id = $2
-         LIMIT 1`,
-        [formId, req.user.id],
-      );
+      const groupIds = req.user.group_ids || [];
+      let query, params;
+      if (groupIds.length) {
+        query = `SELECT 1 FROM form_user_permissions WHERE form_id = $1 AND user_id = $2
+                 UNION
+                 SELECT 1 FROM form_group_permissions
+                 WHERE form_id = $1 AND group_id = ANY($3::bigint[])
+                 LIMIT 1`;
+        params = [formId, req.user.id, groupIds];
+      } else {
+        query = `SELECT 1 FROM form_user_permissions WHERE form_id = $1 AND user_id = $2 LIMIT 1`;
+        params = [formId, req.user.id];
+      }
+
+      const result = await pool.query(query, params);
       if (!result.rows.length) {
         return res
           .status(403)

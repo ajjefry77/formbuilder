@@ -14,8 +14,8 @@
           <tr>
             <th>نام و نام خانوادگی</th>
             <th>شماره تماس (نام کاربری)</th>
-            <th>نقش</th>
-            <th>گروه</th>
+            <th>نقش‌ها</th>
+            <th>گروه‌ها</th>
             <th>وضعیت</th>
             <th>عملیات</th>
           </tr>
@@ -24,13 +24,19 @@
           <tr v-for="u in users" :key="u.id">
             <td>{{ u.full_name }}</td>
             <td dir="ltr" style="text-align:left">{{ u.phone }}</td>
-            <td><span class="badge" :class="u.role === 'admin' ? 'badge-active' : 'badge-inactive'">{{ roleLabel(u.role) }}</span></td>
-            <td>{{ u.group_name || '—' }}</td>
+            <td>
+              <span v-for="r in (u.roles || [u.role])" :key="r" class="badge" :class="r === 'admin' ? 'badge-active' : 'badge-inactive'" style="margin-left:4px">{{ roleLabel(r) }}</span>
+            </td>
+            <td>
+              <span v-if="u.groups?.length">{{ u.groups.map(g => g.name).join('، ') }}</span>
+              <span v-else-if="u.group_name">{{ u.group_name }}</span>
+              <span v-else>—</span>
+            </td>
             <td><span class="badge" :class="u.is_active ? 'badge-active' : 'badge-inactive'">{{ u.is_active ? 'فعال' : 'غیرفعال' }}</span></td>
             <td>
               <div class="row-actions">
                 <button class="btn btn-ghost btn-sm" @click="openEdit(u)">✏️ ویرایش</button>
-                <button class="btn btn-ghost btn-sm" @click="openPermissions(u)" v-if="u.role !== 'admin' && auth.isAdmin">🔑 دسترسی فرم‌ها</button>
+                <button class="btn btn-ghost btn-sm" @click="openPermissions(u)" v-if="!u.roles?.includes('admin') && !(u.role === 'admin') && auth.isAdmin">🔑 دسترسی فرم‌ها</button>
                 <button class="btn btn-danger btn-sm" @click="onDelete(u)">🗑️</button>
               </div>
             </td>
@@ -57,19 +63,23 @@
           <input v-model="form.password" type="password" class="input" />
         </div>
         <div class="prop-group" v-if="auth.isAdmin">
-          <label>نقش</label>
-          <select v-model="form.role" class="select-native">
-            <option value="user">کاربر عادی</option>
-            <option value="group_manager">مدیر گروه</option>
-            <option value="admin">مدیر سیستم</option>
-          </select>
+          <label>نقش‌ها</label>
+          <div class="check-group">
+            <label v-for="opt in roleOptions" :key="opt.value" class="check-row-inline">
+              <input type="checkbox" :value="opt.value" v-model="form.roles" />
+              <span>{{ opt.label }}</span>
+            </label>
+          </div>
         </div>
         <div class="prop-group">
-          <label>گروه{{ auth.isGroupManager ? ' (الزامی)' : '' }}</label>
-          <select v-model="form.group_id" class="select-native">
-            <option :value="null" v-if="!auth.isGroupManager">بدون گروه</option>
-            <option v-for="g in groups" :key="g.id" :value="g.id">{{ g.name }}</option>
-          </select>
+          <label>گروه‌ها{{ auth.isGroupManager ? ' (حداقل یکی الزامی)' : '' }}</label>
+          <div class="check-group">
+            <label v-for="g in groups" :key="g.id" class="check-row-inline">
+              <input type="checkbox" :value="g.id" v-model="form.group_ids" />
+              <span>{{ g.name }}</span>
+            </label>
+            <p v-if="!groups.length" class="empty-hint">گروهی وجود ندارد</p>
+          </div>
         </div>
         <div class="prop-group prop-toggle" v-if="editingUser">
           <label>فعال باشد</label>
@@ -122,12 +132,18 @@ const modalOpen = ref(false)
 const modalError = ref('')
 const saving = ref(false)
 const editingUser = ref(null)
-const form = reactive({ full_name: '', phone: '', password: '', role: 'user', group_id: null, is_active: true })
+const form = reactive({ full_name: '', phone: '', password: '', roles: ['user'], group_ids: [], is_active: true })
 
 const permModalOpen = ref(false)
 const permUser = ref(null)
 const selectedFormIds = ref([])
 const savingPerm = ref(false)
+
+const roleOptions = [
+  { value: 'user', label: 'کاربر عادی' },
+  { value: 'group_manager', label: 'مدیر گروه' },
+  { value: 'admin', label: 'مدیر سیستم' },
+]
 
 onMounted(async () => {
   await Promise.all([fetchUsers(), fetchGroups(), fetchForms()])
@@ -141,14 +157,21 @@ function roleLabel(role) {
 
 function openCreate() {
   editingUser.value = null
-  Object.assign(form, { full_name: '', phone: '', password: '', role: 'user', group_id: auth.isGroupManager ? (groups.value[0]?.id ?? null) : null, is_active: true })
+  Object.assign(form, { full_name: '', phone: '', password: '', roles: ['user'], group_ids: auth.isGroupManager ? [] : [], is_active: true })
   modalError.value = ''
   modalOpen.value = true
 }
 
 function openEdit(u) {
   editingUser.value = u
-  Object.assign(form, { full_name: u.full_name, phone: u.phone, password: '', role: u.role, group_id: u.group_id, is_active: u.is_active })
+  Object.assign(form, {
+    full_name: u.full_name,
+    phone: u.phone,
+    password: '',
+    roles: u.roles || [u.role || 'user'],
+    group_ids: (u.group_ids) || (u.group_id ? [u.group_id] : (u.groups?.map(g => g.id) || [])),
+    is_active: u.is_active,
+  })
   modalError.value = ''
   modalOpen.value = true
 }
@@ -159,15 +182,15 @@ async function onSave() {
     modalError.value = 'لطفاً فیلدهای الزامی را پر کنید'
     return
   }
-  if (auth.isGroupManager && !form.group_id) {
-    modalError.value = 'انتخاب گروه الزامی است'
+  if (auth.isGroupManager && !form.group_ids.length) {
+    modalError.value = 'انتخاب حداقل یک گروه الزامی است'
     return
   }
   saving.value = true
   try {
     const payload = { ...form }
     if (!payload.password) delete payload.password
-    if (auth.isGroupManager) payload.role = 'user'
+    if (auth.isGroupManager) payload.roles = ['user']
     if (editingUser.value) await updateUser(editingUser.value.id, payload)
     else await createUser(payload)
     await fetchUsers()
@@ -223,4 +246,7 @@ async function onSavePermissions() {
 .check-row { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; padding: 6px 8px; border-radius: 8px; }
 .check-row:hover { background: var(--surface2); }
 .empty-hint { font-size: 12px; color: var(--text-muted); }
+.check-group { display: flex; flex-direction: column; gap: 6px; }
+.check-row-inline { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; padding: 4px 6px; border-radius: 6px; }
+.check-row-inline:hover { background: var(--surface2); }
 </style>

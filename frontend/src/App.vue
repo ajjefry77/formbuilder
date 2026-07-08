@@ -32,13 +32,17 @@
             <div class="user-dropdown-info">
               <strong>{{ auth.user?.full_name }}</strong>
               <span class="user-phone" dir="ltr">{{ auth.user?.phone }}</span>
-              <span
-                class="badge"
-                :class="auth.isAdmin ? 'badge-active' : 'badge-inactive'"
-                style="margin-top: 6px; width: fit-content"
-              >
-                {{ auth.isAdmin ? "مدیر سیستم" : (auth.isGroupManager ? "مدیر گروه" : "کاربر") }}
-              </span>
+              <div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px">
+                <span
+                  v-for="r in auth.roles"
+                  :key="r"
+                  class="badge"
+                  :class="r === 'admin' ? 'badge-active' : 'badge-inactive'"
+                  style="width: fit-content"
+                >
+                  {{ r === 'admin' ? 'مدیر سیستم' : (r === 'group_manager' ? 'مدیر گروه' : 'کاربر') }}
+                </span>
+              </div>
             </div>
             <button class="dropdown-item" @click="onLogout">
               🚪 خروج از حساب
@@ -134,7 +138,7 @@ const vClickOutside = {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: linear-gradient(135deg, var(--accent), var(--success));
+  background: linear-gradient(135deg, var(--accent), #d97706);
   box-shadow: 0 0 12px var(--accent-glow);
 }
 .topbar-nav {

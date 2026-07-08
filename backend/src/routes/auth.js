@@ -3,11 +3,10 @@ import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import rateLimit from "express-rate-limit";
 import { pool } from "../db/index.js";
-import { authenticate } from "../middleware/auth.js";
+import { authenticate, fetchUserRoles, fetchUserGroupIds } from "../middleware/auth.js";
 
 const router = Router();
 
-// محدودیت تلاش ورود برای جلوگیری از حمله‌ی brute-force روی رمز عبور
 const loginLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   limit: 10,
@@ -25,8 +24,6 @@ function signToken(user) {
     {
       id: user.id,
       phone: user.phone,
-      role: user.role,
-      group_id: user.group_id,
       full_name: user.full_name,
     },
     process.env.JWT_SECRET,
@@ -34,7 +31,6 @@ function signToken(user) {
   );
 }
 
-// POST /api/auth/login  { phone, password }
 // POST /api/auth/login
 router.post("/login", loginLimiter, async (req, res) => {
   const { phone, password } = req.body;
@@ -63,25 +59,34 @@ router.post("/login", loginLimiter, async (req, res) => {
     }
 
     // فعال‌سازی اتوماتیک کاربر بعد از اولین لاگین موفق
-    // گروه کاربر از قبل (هنگام ایجاد توسط مدیر گروه) تعیین شده؛ اینجا فقط فعال می‌شود.
-    // اگر به هر دلیلی گروهی تعیین نشده بود ولی سازنده‌ی او مدیرگروه بود، به عنوان تمهید عقب‌افتادگی
-    // به اولین گروه سازنده ملحق می‌شود.
     if (!user.is_active) {
-      let groupId = user.group_id;
-      if (!groupId && user.created_by) {
+      const ug = await pool.query(
+        'SELECT group_id FROM user_groups WHERE user_id = $1 LIMIT 1',
+        [user.id]
+      );
+      if (!ug.rows.length && user.created_by) {
         const g = await pool.query(
           'SELECT id FROM groups WHERE created_by = $1 ORDER BY id LIMIT 1',
           [user.created_by]
         );
-        if (g.rows.length) groupId = g.rows[0].id;
+        if (g.rows.length) {
+          await pool.query(
+            'INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING',
+            [user.id, g.rows[0].id]
+          );
+        }
       }
       await pool.query(
-        'UPDATE users SET is_active = true, group_id = COALESCE($1, group_id), updated_at = NOW() WHERE id = $2',
-        [groupId, user.id],
+        'UPDATE users SET is_active = true, updated_at = NOW() WHERE id = $1',
+        [user.id],
       );
       user.is_active = true;
-      if (groupId) user.group_id = groupId;
     }
+
+    const [roles, group_ids] = await Promise.all([
+      fetchUserRoles(user.id),
+      fetchUserGroupIds(user.id),
+    ]);
 
     const token = signToken(user);
 
@@ -93,8 +98,8 @@ router.post("/login", loginLimiter, async (req, res) => {
           id: user.id,
           full_name: user.full_name,
           phone: user.phone,
-          role: user.role,
-          group_id: user.group_id,
+          roles,
+          group_ids,
         },
       },
     });
@@ -107,13 +112,17 @@ router.post("/login", loginLimiter, async (req, res) => {
 router.get("/me", authenticate, async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `SELECT u.id, u.full_name, u.phone, u.role, u.group_id, g.name AS group_name
-       FROM users u LEFT JOIN groups g ON g.id = u.group_id WHERE u.id = $1`,
+      `SELECT u.id, u.full_name, u.phone, u.created_at
+       FROM users u WHERE u.id = $1`,
       [req.user.id],
     );
     if (!rows.length)
       return res.status(404).json({ success: false, error: "کاربر یافت نشد" });
-    res.json({ success: true, data: rows[0] });
+    const [roles, group_ids] = await Promise.all([
+      fetchUserRoles(req.user.id),
+      fetchUserGroupIds(req.user.id),
+    ]);
+    res.json({ success: true, data: { ...rows[0], roles, group_ids } });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

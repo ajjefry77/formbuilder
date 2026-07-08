@@ -9,42 +9,57 @@ import {
 } from "../middleware/auth.js";
 
 const router = Router();
-router.use(authenticate); // تمام مسیرهای این فایل نیاز به احراز هویت دارند
+router.use(authenticate);
 
 const PHONE_RE = /^09\d{9}$/;
 
+function hasRole(user, role) {
+  return user?.roles?.includes(role);
+}
+
 // GET /api/users
-// مدیر سیستم همه‌ی کاربران را می‌بیند؛ مدیر گروه فقط کاربرانی که خودش ساخته
 router.get("/", requireGroupManagerOrAdmin, async (req, res) => {
   try {
-    const isAdmin = req.user.role === "admin";
+    const isAdmin = hasRole(req.user, 'admin');
     let query = `
-      SELECT u.id, u.full_name, u.phone, u.role, u.group_id, g.name AS group_name,
-             u.is_active, u.created_at
-      FROM users u LEFT JOIN groups g ON g.id = u.group_id`;
+      SELECT u.id, u.full_name, u.phone, u.is_active, u.created_at
+      FROM users u`;
     const params = [];
     if (!isAdmin) {
       query += " WHERE u.created_by = $1";
       params.push(req.user.id);
     }
-    const { rows } = await pool.query(
-      query + " ORDER BY u.created_at DESC",
-      params,
-    );
-    res.json({ success: true, data: rows });
+    query += " ORDER BY u.created_at DESC";
+    const { rows } = await pool.query(query, params);
+    // گرفتن roles و group_ids برای هر کاربر
+    const data = await Promise.all(rows.map(async (u) => {
+      const [roles, groups] = await Promise.all([
+        pool.query("SELECT role FROM user_roles WHERE user_id = $1", [u.id]),
+        pool.query(
+          `SELECT g.id, g.name FROM user_groups ug JOIN groups g ON g.id = ug.group_id WHERE ug.user_id = $1`,
+          [u.id]
+        ),
+      ]);
+      return {
+        ...u,
+        roles: roles.rows.map(r => r.role),
+        groups: groups.rows.map(g => ({ id: g.id, name: g.name })),
+      };
+    }));
+    res.json({ success: true, data });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// POST /api/users  - ایجاد کاربر جدید (نام کاربری = شماره تماس)
+// POST /api/users
 router.post("/", requireGroupManagerOrAdmin, async (req, res) => {
   const {
     full_name,
     phone,
     password,
-    role = "user",
-    group_id = null,
+    roles = ["user"],
+    group_ids = [],
   } = req.body;
 
   if (!full_name || !phone || !password) {
@@ -53,94 +68,105 @@ router.post("/", requireGroupManagerOrAdmin, async (req, res) => {
       .json({ success: false, error: "نام، شماره تماس و رمز عبور الزامی است" });
   }
 
-  // مدیر گروه فقط می‌تواند کاربر عادی بسازد
-  if (req.user.role === "group_manager" && role !== "user") {
-    return res
-      .status(403)
-      .json({ success: false, error: "مدیر گروه فقط می‌تواند کاربر عادی بسازد" });
-  }
-
-  let finalGroupId = group_id;
-
-  if (req.user.role === "group_manager") {
-    // مدیر گروه باید مشخص کند کاربر جدید عضو کدام یک از گروه‌های خودش باشد
-    if (!finalGroupId) {
+  if (hasRole(req.user, 'group_manager')) {
+    if (roles.some(r => r !== 'user')) {
+      return res
+        .status(403)
+        .json({ success: false, error: "مدیر گروه فقط می‌تواند کاربر عادی بسازد" });
+    }
+    if (!group_ids.length) {
       return res
         .status(400)
-        .json({ success: false, error: "انتخاب گروه برای کاربر جدید الزامی است" });
+        .json({ success: false, error: "انتخاب حداقل یک گروه برای کاربر جدید الزامی است" });
     }
-    try {
+    for (const gId of group_ids) {
       const g = await pool.query(
         "SELECT 1 FROM groups WHERE id = $1 AND created_by = $2",
-        [finalGroupId, req.user.id],
+        [gId, req.user.id],
       );
       if (!g.rows.length) {
         return res
           .status(403)
-          .json({ success: false, error: "شما مالک این گروه نیستید" });
+          .json({ success: false, error: `شما مالک گروه ${gId} نیستید` });
       }
-    } catch (err) {
-      return res.status(500).json({ success: false, error: err.message });
     }
   }
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
     const hash = await bcrypt.hash(password, 12);
-    // کاربر تا زمانی که خودش برای اولین بار وارد شود غیرفعال باقی می‌ماند
-    // (گروه از قبل تعیین شده، اما فعال‌سازی و دسترسی مؤثر با اولین ورود اتفاق می‌افتد)
-    const { rows } = await pool.query(
-      `INSERT INTO users (full_name, phone, password_hash, role, group_id, created_by, is_active)
-       VALUES ($1, $2, $3, $4, $5, $6, false)
-       RETURNING id, full_name, phone, role, group_id, created_by, is_active`,
-      [full_name, phone, hash, role, finalGroupId, req.user.id],
+    const { rows } = await client.query(
+      `INSERT INTO users (full_name, phone, password_hash, created_by, is_active)
+       VALUES ($1, $2, $3, $4, false)
+       RETURNING id, full_name, phone, is_active`,
+      [full_name, phone, hash, req.user.id],
     );
-    res.status(201).json({ success: true, data: rows[0] });
+    const userId = rows[0].id;
+
+    for (const role of roles) {
+      await client.query(
+        "INSERT INTO user_roles (user_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [userId, role],
+      );
+    }
+    for (const gId of group_ids) {
+      await client.query(
+        "INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [userId, gId],
+      );
+    }
+    await client.query("COMMIT");
+    res.status(201).json({ success: true, data: { ...rows[0], roles, group_ids } });
   } catch (err) {
+    await client.query("ROLLBACK");
     if (err.code === "23505")
       return res
         .status(409)
         .json({ success: false, error: "این شماره تماس قبلاً ثبت شده است" });
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
   }
 });
 
 // PUT /api/users/:id
-// مدیر سیستم هر کاربری را ویرایش می‌کند؛ مدیر گروه فقط کاربرانی که خودش ساخته و فقط داخل گروه‌های خودش
 router.put("/:id", requireGroupManagerOrAdmin, checkUserOwnership(), async (req, res) => {
-  const { full_name, phone, password, role, group_id, is_active } = req.body;
+  const { full_name, phone, password, roles, group_ids, is_active } = req.body;
   if (phone && !PHONE_RE.test(phone)) {
     return res
       .status(400)
       .json({ success: false, error: "شماره تماس معتبر نیست" });
   }
 
-  const isAdmin = req.user.role === "admin";
+  const isAdmin = hasRole(req.user, 'admin');
 
-  // مدیر گروه نمی‌تواند نقش کاربر را تغییر دهد یا او را از حالت «کاربر عادی» خارج کند
-  if (!isAdmin && role && role !== "user") {
-    return res
-      .status(403)
-      .json({ success: false, error: "مدیر گروه فقط می‌تواند کاربر عادی مدیریت کند" });
+  if (!isAdmin && roles) {
+    if (roles.some(r => r !== 'user')) {
+      return res
+        .status(403)
+        .json({ success: false, error: "مدیر گروه فقط می‌تواند کاربر عادی مدیریت کند" });
+    }
   }
 
-  // مدیر گروه فقط می‌تواند کاربر را به یکی از گروه‌های خودش منتقل کند
-  if (!isAdmin && group_id) {
-    try {
+  if (!isAdmin && group_ids?.length) {
+    for (const gId of group_ids) {
       const g = await pool.query(
         "SELECT 1 FROM groups WHERE id = $1 AND created_by = $2",
-        [group_id, req.user.id],
+        [gId, req.user.id],
       );
       if (!g.rows.length) {
         return res
           .status(403)
-          .json({ success: false, error: "شما مالک این گروه نیستید" });
+          .json({ success: false, error: `شما مالک گروه ${gId} نیستید` });
       }
-    } catch (err) {
-      return res.status(500).json({ success: false, error: err.message });
     }
   }
 
+  const client = await pool.connect();
   try {
+    await client.query("BEGIN");
+
     let passwordHash = null;
     if (password) {
       if (password.length < 6)
@@ -152,43 +178,77 @@ router.put("/:id", requireGroupManagerOrAdmin, checkUserOwnership(), async (req,
           });
       passwordHash = await bcrypt.hash(password, 12);
     }
-    const groupIdProvided = group_id !== undefined;
-    const { rows } = await pool.query(
+
+    const { rows } = await client.query(
       `UPDATE users SET
          full_name = COALESCE($1, full_name),
          phone = COALESCE($2, phone),
          password_hash = COALESCE($3, password_hash),
-         role = COALESCE($4, role),
-         group_id = CASE WHEN $5 THEN $6 ELSE group_id END,
-         is_active = COALESCE($7, is_active),
+         is_active = COALESCE($4, is_active),
          updated_at = NOW()
-       WHERE id = $8
-       RETURNING id, full_name, phone, role, group_id, is_active, created_at`,
+       WHERE id = $5
+       RETURNING id, full_name, phone, is_active, created_at`,
       [
         full_name,
         phone,
         passwordHash,
-        isAdmin ? role : null,
-        groupIdProvided,
-        group_id ?? null,
         is_active,
         req.params.id,
       ],
     );
-    if (!rows.length)
+    if (!rows.length) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ success: false, error: "کاربر یافت نشد" });
-    res.json({ success: true, data: rows[0] });
+    }
+
+    if (roles && isAdmin) {
+      await client.query("DELETE FROM user_roles WHERE user_id = $1", [req.params.id]);
+      for (const role of roles) {
+        await client.query(
+          "INSERT INTO user_roles (user_id, role) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [req.params.id, role],
+        );
+      }
+    }
+    if (group_ids !== undefined) {
+      await client.query("DELETE FROM user_groups WHERE user_id = $1", [req.params.id]);
+      for (const gId of group_ids) {
+        await client.query(
+          "INSERT INTO user_groups (user_id, group_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+          [req.params.id, gId],
+        );
+      }
+    }
+
+    await client.query("COMMIT");
+    const [finalRoles, finalGroups] = await Promise.all([
+      pool.query("SELECT role FROM user_roles WHERE user_id = $1", [req.params.id]),
+      pool.query(
+        `SELECT g.id, g.name FROM user_groups ug JOIN groups g ON g.id = ug.group_id WHERE ug.user_id = $1`,
+        [req.params.id]
+      ),
+    ]);
+    res.json({
+      success: true,
+      data: {
+        ...rows[0],
+        roles: finalRoles.rows.map(r => r.role),
+        groups: finalGroups.rows.map(g => ({ id: g.id, name: g.name })),
+      },
+    });
   } catch (err) {
+    await client.query("ROLLBACK");
     if (err.code === "23505")
       return res
         .status(409)
         .json({ success: false, error: "این شماره تماس قبلاً ثبت شده است" });
     res.status(500).json({ success: false, error: err.message });
+  } finally {
+    client.release();
   }
 });
 
 // DELETE /api/users/:id
-// مدیر سیستم هر کاربری را حذف می‌کند؛ مدیر گروه فقط کاربرانی که خودش ساخته
 router.delete("/:id", requireGroupManagerOrAdmin, checkUserOwnership(), async (req, res) => {
   if (req.params.id === req.user.id) {
     return res
